@@ -5,7 +5,6 @@ import pandas as pd
 from tqdm import tqdm
 import warnings
 warnings.filterwarnings(action='ignore')
-#from numba import jit
 zip_file = os.getcwd()+"/data/avazu/data/data.zip"
 extract_to = os.getcwd()+"/data/avazu"
 import zipfile
@@ -14,109 +13,63 @@ with zipfile.ZipFile(zip_file, 'r') as zip_ref:
 
 
 #%%
-@jit
-#def ucb1_df(n_iterations, rounds):
-main_df = np.genfromtxt(extract_to+"/top_app_category.csv",
-                        delimiter=',',
-                        dtype=str,
-                        encoding='UTF-8')
-main_df = np.delete(main_df, 0, axis=0)
-main_df = np.delete(main_df, [0,4], axis=1)
-main_df[:,0] = main_df[:,0].astype(int)
+rdata = pd.read_csv(filepath_or_buffer= extract_to+"/top_app_category.csv")[['reward', 'app_category', 'count']]
+rdata['w_reward'] = rdata['reward']*rdata['count']
+rdata = rdata.groupby('app_category').sum()
+rdata
+actual_ctr = np.array(rdata['w_reward']/rdata['count'])
+target_v = np.max(actual_ctr)
 
-item_col_name = 2
+probData = np.array(rdata['w_reward']/rdata['count'])
+countData = np.array(rdata['count'])
+rewardData = np.array(rdata['w_reward'])
 
-items = np.unique(main_df[:,item_col_name])
-n_items = len(items)
-
-actual_ctr = []
-for app in items:
-    idx = np.where(main_df[:,2]==app)[0]
-    actual_ctr.append(np.mean(main_df[idx][:,0].astype(int)))
+max_rounds = 1000000
+regret = 0
+regretVec = np.zeros(max_rounds)
+p = len(probData)
+n_item_samples = np.zeros(p, dtype='int')
+n_item_rewards = np.zeros(p)
+n_rounds = 0
+seed_idx = 1
+np.random.seed(seed_idx)
+#%%
+for i in range(0,p):
+    n_rounds += 1
+    regret += target_v - actual_ctr[i]
+    regretVec[i] = regret
+    x = np.random.binomial(1, probData[i])
+    n_item_samples[i] += 1
+    countData[i] -= 1
+    if x==1:
+        n_item_rewards[i] += 1
+        rewardData[i] -= 1
+probData = rewardData/countData
 
 #%%
-n_iterations = 10000
 results = []
-iteration = 0
-for iteration in tqdm(range(n_iterations)):
+j = 10
+for j in tqdm(range(p, max_rounds)):
+    exploration = 2 * np.log(n_rounds + 1) / n_item_samples
+    exploration = np.power(exploration, 1/2)
+    q = n_item_rewards/n_item_samples + exploration
+    i = np.argmax(q)
+    if (countData[i] == 0):
+        break
     
-    np.random.seed(iteration)
-    sample_df = np.random.permutation(main_df)
-    rewardVec = sample_df[:,0].astype('int')
-    armVec = sample_df[:,2]
-    index_list = list()
-    index_list_len = list()
-#    index_list_counts = np.zeros(n_items)
-
-    for app in items:
-        idx = np.where(armVec==app)[0]
-        index_list.append(idx)
-        index_list_len.append(len(idx))
-
-    n_item_samples = np.zeros(n_items, dtype='int')
-    n_item_rewards = np.zeros(n_items)
-    regret = 0
-    total_reward = 0
-    n_rounds = 1
-
-    # First trial for all arms in turn
-    for item_idx in range(n_items):
-        sel_idx = index_list[item_idx][0]
-        reward = rewardVec[sel_idx] 
-        n_item_samples[item_idx] += 1
-        n_item_rewards[item_idx] += reward
-        regret += max(actual_ctr) - actual_ctr[item_idx]
-        
-        total_reward += reward
-        
-        result = {}
-        result['iteration'] = iteration
-        result['round'] = n_rounds
-        n_rounds += 1
-        result['item_id'] = items[item_idx]
-        result['reward'] = reward
-        result['total_reward'] = total_reward
-        result['avg_reward'] = total_reward * 1. / (n_rounds + 1)
-        result['cumulative_regret'] = regret
-        results.append(result)
-
-    
-    for n_rounds in range(n_items, rounds):
-        exploration = 2 * np.log(n_rounds + 1) / n_item_samples
-        exploration = np.power(exploration, 1/2)
-        
-        q = n_item_rewards + exploration
-        
-        item_idx = np.argmax(q)
-        if (n_item_samples[item_idx] == index_list_len[item_idx]):
-            break
-        else:
-            sel_idx = index_list[item_idx][n_item_samples[item_idx]] 
-        
-        reward = rewardVec[sel_idx] 
-        n_item_samples[item_idx] += 1
-        n_item_rewards[item_idx] += reward
-        regret += max(actual_ctr) - actual_ctr[item_idx]
-        total_reward += reward
-        
-        #alpha = 1./n_item_samples[item_idx]
-        #n_item_rewards[item_idx] += alpha * (reward - n_item_rewards[item_idx])
-        result = {}
-        result['iteration'] = iteration
-        result['round'] = n_rounds
-        result['item_id'] = item_id
-        result['reward'] = reward
-        result['total_reward'] = total_reward
-        result['avg_reward'] = total_reward * 1. / (n_rounds + 1)
-        result['cumulative_regret'] = regret
-        results.append(result)
+    n_rounds += 1
+    regret += target_v - actual_ctr[i]
+    regretVec[j] = regret
+    x = np.random.binomial(1, probData[i])
+    n_item_samples[i] += 1
+    countData[i] -= 1
+    if x==1:
+        n_item_rewards[i] += 1
+        rewardData[i] -= 1
+    probData[i] =  rewardData[i]/countData[i]   
 
 
-
-#%%
-ucb1_results = pd.DataFrame(ucb1_df(n_iterations=10,
-                                    rounds=100000))
-
-ucb1_results.to_csv('/Users/huiwon/Desktop/Recommendation/bandit/experiment/final_experiment/rounds/avazu_ucb1.csv')
-
-#%%
+# %%
+import matplotlib.pyplot as plt
+plt.plot(regretVec)
+# %%
